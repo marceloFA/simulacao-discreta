@@ -9,21 +9,25 @@
     Lista de pendências:
     - adicionar lógica que aloca mais leitos quando eles ficam próximo do treshold de ocupação máxima (mandatory)
     - adicionar a lógica que libera leitos quando eles ficam inativos por algumas semanas (mandatory)
-    - Mostra um lineplot com a ocupação média usando o pacote termplotlib (nice to have)
+    - (FEITO) Mostra um lineplot com a ocupação média usando o pacote termplotlib (nice to have)
     - Adiciona explicações relevantes sobre a simulação nesta docstring
     - formata o código antes da entrega final
     
 """
 
-import random
-import statistics
 import argparse
+import os
+import random
+from shutil import which
+import statistics
 
+import termplotlib as tpl
 import simpy
 
 
+
 # Argumentos padrões da simulação
-RANDOM_SEED = 42
+SEED = 42
 DEFAULT_N_WEEKS = 52 # simula por um ano
 NUMBER_OF_ICU_BEDS = 9860 # Número de leitos na França
 NUMBER_OF_INITIAL_PATIENTS = 100 # Pacientes iniciais
@@ -96,7 +100,7 @@ def run_icu_bed_monitor(env, monitor, n_weeks):
         print(f'\nSemana {env.now}: Liberou {discharges} e admitiu {admissions} pacientes')
 
         curent_held_beds = monitor.total_beds - monitor.beds.level
-        ocupation_percentage = monitor.beds.level/monitor.total_beds * 100
+        ocupation_percentage = curent_held_beds/monitor.total_beds * 100
         ocupation_percentage_history.append(ocupation_percentage)
         #waiting_for_bed_history.append()
 
@@ -108,47 +112,84 @@ def run_icu_bed_monitor(env, monitor, n_weeks):
 
 # ArgumentParser para coletar argumentos através da linha de comando
 parser = argparse.ArgumentParser(description='Simulador de ocupação de leitos de UTI para pacientes com COVID-19.')
+
 parser.add_argument('-t',
                     '--tempo-de-simulacao',
                     type=int,
                     default=DEFAULT_N_WEEKS,
                     dest="n_weeks",
                     help=f'(Opcional) Tempo da simulação em semanas; padrão é {DEFAULT_N_WEEKS}')
+
 parser.add_argument('-l',
                     '--leitos',
                     type=int,
                     default=NUMBER_OF_ICU_BEDS,
                     dest="n_beds",
                     help=f'(Opcional) Número de leitos de UTI disponíveis, padrão é {NUMBER_OF_ICU_BEDS}')
+
 parser.add_argument('-p',
                     '--pacientes-iniciais',
                     type=int,
                     default=NUMBER_OF_INITIAL_PATIENTS,
                     dest="n_initial_patients",
-                    help=f'(Opcional) Número de pacientes iniciais, padrão é {NUMBER_OF_INITIAL_PATIENTS}')
-                    
+                    help=f'(Opcional) Número de pacientes iniciais, padrão é {NUMBER_OF_INITIAL_PATIENTS}')                
+
 parser.add_argument('-s',
                     '--semente',
                     type=int,
-                    default=RANDOM_SEED,
+                    default=SEED,
                     dest="seed",
                     help='(Opcional) Semente de aleatoriedade para obtenção de resultados reproduzíveis.')
+
+parser.add_argument('-a',
+                    '--usar-sementes-aleatorias',
+                    action='store_true',                    
+                    default=False,
+                    dest="use_random_seed",
+                    help='(Opcional) Faz os experimentos sempre rodarem com sementes aleatórias.')
+
+
+def plot_results():
+    """ desenha na linha de comando gráficos com alguns resultado relevantes da simulação """
+    
+    # obtem as dimensões atuais do terminal
+    term_height, term_width = os.popen('stty size', 'r').read().split()
+
+    fig = tpl.figure()
+    x = range(len(ocupation_percentage_history))
+    
+    print("\nOcupação média dos leitos ao longo das semanas:")
+    fig.plot(
+        x=x,
+        y=ocupation_percentage_history,
+        width=int(term_width),
+        height=int(term_height)//2
+    )
+
+    
+
+    fig.show()
 
 
 def simulate():
     """ Executa a simulação """
 
     args = parser.parse_args()
-    random.seed(args.seed)
+    
+    if not args.use_random_seed:
+        random.seed(args.seed)
 
     # Executa a simulação
     env = simpy.Environment()
     monitor = ICUMonitor(env, args.n_beds, args.n_initial_patients)
     env.process(run_icu_bed_monitor(env, monitor, args.n_weeks))
     env.run()
-    print("\nSimulação finalziada. Algumas estatísticas abaixo:")
+    print("\nSimulação finalizada.")
 
-    # TODO: apresenta dados sobre a ocupação média    
+    # Apresenta gráficos sobre a ocupação média (se o cliente tiver gnuplot instalado)
+    if which('gnuplot') is not None:
+        plot_results()
+    
 
 
 if __name__ == "__main__":
