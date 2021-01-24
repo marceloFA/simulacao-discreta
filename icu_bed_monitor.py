@@ -21,6 +21,7 @@ import random
 from shutil import which
 import statistics
 
+import numpy
 import termplotlib as tpl
 import simpy
 
@@ -43,15 +44,15 @@ waiting_for_bed_history = []
 # de leitos na França, disponível em:
 # ecdc.europa.eu/en/publications-data/download-data-hospital-and-icu-admission-rates-and-current-occupancy-covid-19
 EVENTS_STATISTICS = {
-    'weekly_admissions':{'mean':992.38, 'stdev':758.72},
-    'weekly_discharges':{'mean':985.27, 'stdev':922.06}
+    'admissions':{'mean':992.38, 'stdev':758.72},
+    'discharges':{'mean':985.27, 'stdev':922.06}
 }
 
 
 class ICUMonitor():
     """ Contém a lógica de controle do monitor de leitos que será simulado """
 
-    def __init__(self, env, n_beds, n_initial_patients):
+    def __init__(self, env, n_beds, n_init_patients, admissions_pdf, discharges_pdf):
         """ Ao instanciar o monitor de leitos, considerar estes atributos inciais """
 
         self.env = env
@@ -59,24 +60,32 @@ class ICUMonitor():
         self.total_beds = n_beds
         self.wainting_for_bed = 0
 
+        # define qual função densidade de probabilidade é usada para gerar os
+        # números de admissões e liberações semanais dosleitos
+        self.admissions_pdf = admissions_pdf
+        self.discharges_pdf = discharges_pdf
 
-    def weekly_admissions(self):
-        """ Gera o número de novas admissões semanais a partir de uma distribuição normal """
 
-        admissions = random.gauss(
-            EVENTS_STATISTICS['weekly_admissions']['mean'],
-            EVENTS_STATISTICS['weekly_admissions']['stdev']
-        )
+    def weekly_transit(self, kind:str):
+        """ Gera o número de novas admissões semanais a partir de uma distribuição normal 
+            kind: pode ser 'admissions' ou 'discharges' """
+
+        #  obtém a função densidade de probabilidade desejada
+        pdf = self.admissions_pdf if kind == "admissions" else self.discharges_pdf
+        density_function = getattr(numpy.random, pdf)
+        admissions = None
+
+        if pdf == "exponential":
+            # tirar de uma exponencial não requer os desvio padrão da distribuição
+            admissions = density_function(EVENTS_STATISTICS[kind]['mean'])
+
+        elif pdf == "lognormal" or pdf == "normal":            
+            admissions = density_function(
+                EVENTS_STATISTICS[kind]['mean'],
+                EVENTS_STATISTICS[kind]['stdev']
+            )
+
         return int(admissions)
-
-    def weekly_dischages(self):
-        """ Gera o número semanal de altas de UTI """
-
-        discharges = random.gauss(
-            EVENTS_STATISTICS['weekly_discharges']['mean'],
-            EVENTS_STATISTICS['weekly_discharges']['stdev']
-        )
-        return int(discharges)
 
 
 def run_icu_bed_monitor(env, monitor, n_weeks):
@@ -84,10 +93,10 @@ def run_icu_bed_monitor(env, monitor, n_weeks):
         monitor de leitos com as movimentações semanais """
 
     for _ in range(n_weeks):
-        admissions = monitor.weekly_admissions()
+        admissions = monitor.weekly_transit(kind='admissions')
         # solução temporária até gerar um número coerente de liberações
         past_held_beds = monitor.total_beds - monitor.beds.level
-        real_discharges = monitor.weekly_dischages()
+        real_discharges = monitor.weekly_transit(kind='discharges')
         discharges = real_discharges if real_discharges <= past_held_beds else past_held_beds
 
         #TODO: aloca mais ou libera leitos se a demanda pedir isso
@@ -131,7 +140,7 @@ parser.add_argument('-p',
                     '--pacientes-iniciais',
                     type=int,
                     default=NUMBER_OF_INITIAL_PATIENTS,
-                    dest="n_initial_patients",
+                    dest="n_init_patients",
                     help=f'(Opcional) Número de pacientes iniciais, padrão é {NUMBER_OF_INITIAL_PATIENTS}')                
 
 parser.add_argument('-s',
@@ -166,8 +175,6 @@ def plot_results():
         height=int(term_height)//2
     )
 
-    
-
     fig.show()
 
 
@@ -181,7 +188,13 @@ def simulate():
 
     # Executa a simulação
     env = simpy.Environment()
-    monitor = ICUMonitor(env, args.n_beds, args.n_initial_patients)
+    monitor = ICUMonitor(
+        env, 
+        n_beds=args.n_beds, 
+        n_init_patients=args.n_init_patients,
+        admissions_pdf='exponential',
+        discharges_pdf='exponential'    
+    )
     env.process(run_icu_bed_monitor(env, monitor, args.n_weeks))
     env.run()
     print("\nSimulação finalizada.")
