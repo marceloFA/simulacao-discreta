@@ -13,11 +13,20 @@
     - Adiciona explicações relevantes sobre a simulação nesta docstring
     - formata o código antes da entrega final
     
+    Dados relevantes sobre a pandemia na França:
+    - data de início do primeiro lockdown nacional na França: 17 de março, semana 12, ocupação era de 14%, 1700 novas admissões
+    - primeiro pico de admissões em UTIs: semana 14, duas semanas após o ínicio do lockdown
+
+    - segundo lockdown na França: 28 de outubro a 14 de dezembro, semana 44, ocupação era de 30%, 2571 novas admissões
+    - segundo pico de admissões em UTIS: semana 45, uma semana após o ínicio do lockdown
+
+    (essa datas de pico de admissões fazem bastante sentido considerando o tempo médio de incubação do vírus
+    e o tempo médio de ínicio da fase mais violenta da doença nos acometidos por ela)
 """
 
 import argparse
+from typing import List
 import os
-import random
 from shutil import which
 import statistics
 
@@ -26,95 +35,154 @@ import termplotlib as tpl
 import simpy
 
 
-
 # Argumentos padrões da simulação
-SEED = 42
 DEFAULT_N_WEEKS = 52 # simula por um ano
 NUMBER_OF_ICU_BEDS = 9860 # Número de leitos na França
 NUMBER_OF_INITIAL_PATIENTS = 100 # Pacientes iniciais
+
+# arguementos relacionados ao cenário de simulação 1: lockdown de dezembro extendido
+SCENARIO_1_N_WEEKS = 10
+SCENARIO_1_LOCKDOWN = list(range(5)) # lockdown vai da 1° a 4° semana de simulação
+SCENARIO_1_PACIENTS = 2896 # Número de leitos ocupados em 14 de dezembro de 2020
+
+# sem uso por enquanto
 TIME_TO_CLOSE_BED = 3 # semanas para desativar leitos vazios
-MAX_OCUPATION_TO_NEW_BEDS = 0.80 # limite de ocupação para a criação de novos leitoss
+MAX_OCUPATION_TO_NEW_BEDS = 0.70 # limite de ocupação para a criação de novos leitos
+LOCKDOWN_ON_PERCENTAGE = 0.30 # pocentagem de ocupação limite (passou disso é lockdown)
+LOCDOWN_OFF_PERCENTAGE = 0.10 # porcentagem de ocupação limite para remoção do lock down
 
 # armazena algumas métricas importantes da simulação
 ocupation_percentage_history = []
-waiting_for_bed_history = []
+absolute_ocupation_history = []
 
 # Dados para a geração dos eventos aleatórios
 # valores são provenientes da análise exploratória dos dados sobre a ocupação
 # de leitos na França, disponível em:
 # ecdc.europa.eu/en/publications-data/download-data-hospital-and-icu-admission-rates-and-current-occupancy-covid-19
 EVENTS_STATISTICS = {
-    'admissions':{'mean':992.38, 'stdev':758.72},
-    'discharges':{'mean':985.27, 'stdev':922.06}
+    'admissions':{'mean':992.38, 'stdev':758.72, 'weeks':52},
+    'discharges':{'mean':985.27, 'stdev':922.06, 'weeks':52}
 }
 
 
 class ICUMonitor():
     """ Contém a lógica de controle do monitor de leitos que será simulado """
 
-    def __init__(self, env, n_beds, n_init_patients, admissions_pdf, discharges_pdf):
+    def __init__(self, env, n_weeks, n_beds, n_patients, adm_pdf, disc_pdf):
         """ Ao instanciar o monitor de leitos, considerar estes atributos inciais """
 
         self.env = env
-        self.beds = simpy.Container(env, n_beds, init=n_beds)
+        # o número de leitos inicialmente disponíveis é o total menos o inicialmente alocado
+        self.beds = simpy.Container(env, n_beds, init=n_beds-n_patients)
         self.total_beds = n_beds
-        self.wainting_for_bed = 0
 
         # define qual função densidade de probabilidade é usada para gerar os
         # números de admissões e liberações semanais dosleitos
-        self.admissions_pdf = admissions_pdf
-        self.discharges_pdf = discharges_pdf
+        self.admissions_pdf = adm_pdf
+        self.discharges_pdf = disc_pdf
+        # amostra valores para as admissões e liberações de leitos
+        self.n_weeks = n_weeks
+        # amostra os valores antes de iniciar a simulação
+        self.admissions = self.generate_weekly_transit(kind="admissions")
+        self.discharges = self.generate_weekly_transit(kind="discharges")
 
 
-    def weekly_transit(self, kind:str):
-        """ Gera o número de novas admissões semanais a partir de uma distribuição normal 
+    def generate_weekly_transit(self, kind:str, n_weeks=None):
+        """ Amostra o número de novas admissões semanais a partir de uma distribuição normal 
             kind: pode ser 'admissions' ou 'discharges' """
 
         #  obtém a função densidade de probabilidade desejada
         pdf = self.admissions_pdf if kind == "admissions" else self.discharges_pdf
         density_function = getattr(numpy.random, pdf)
-        admissions = None
+        transit = None
+
+        n_weeks = n_weeks or self.n_weeks
 
         if pdf == "exponential":
-            # tirar de uma exponencial não requer os desvio padrão da distribuição
-            admissions = density_function(EVENTS_STATISTICS[kind]['mean'])
-
-        elif pdf == "lognormal" or pdf == "normal":            
-            admissions = density_function(
+            # caveat: amostrar de uma exponencial não requer os desvio padrão da distribuição
+            transit = density_function(
                 EVENTS_STATISTICS[kind]['mean'],
-                EVENTS_STATISTICS[kind]['stdev']
+                size=n_weeks
             )
 
-        return int(admissions)
+        elif pdf == "lognormal" or pdf == "normal":            
+            transit = density_function(
+                EVENTS_STATISTICS[kind]['mean'],
+                EVENTS_STATISTICS[kind]['stdev'],
+                size=n_weeks
+            )
+
+        return sorted([int(i) for i in transit])
 
 
-def run_icu_bed_monitor(env, monitor, n_weeks):
+    def record_ocupation_percentage(self, week):
+        """ Calcula e armazena estatísticas sobre a ocupação de leitos da semana """
+
+        curent_held_beds = self.total_beds - self.beds.level
+        ocupation_percentage = curent_held_beds / self.total_beds * 100
+        
+        absolute_ocupation_history.append(curent_held_beds)
+        ocupation_percentage_history.append(ocupation_percentage)
+        print(f"Semana {week}: {self.total_beds} leitos ({curent_held_beds} ocupados e {self.beds.level} livres). Ocupação de {int(ocupation_percentage)}%")
+
+    def cenario_1(self, env):
+        """ Cenário onde o lockdown foi decretado tardiamente, como no Reino Unido """
+        pass
+
+
+def manage_lockdown(monitor, week: int, lockdown_interval: List, last_transmissibility: float):
+    """ Altera os parametros da simulação como ocorreria em caso de lockdown """
+
+    # de fato só precisa gerenciar um lockdown o usuário definir um
+    if lockdown_interval == []: return last_transmissibility
+    
+    in_lockdown = week in lockdown_interval
+    # verifica se está no estado recém saído do lockdown
+    lockdown_end_week = lockdown_interval[-1]
+    recent_lockdown_end = lockdown_end_week <= week <= lockdown_end_week + 2
+    mild_spread = in_lockdown or recent_lockdown_end
+    
+    # retorna o fator de contágio adequado ao momento
+    transmissibility = 0.25 if mild_spread else 1
+    transmissibility += 0.25 if recent_lockdown_end else 0
+    
+    # determina se acabou o cooldown do lockdown por completo para reamostrar os dados
+    if last_transmissibility < 1 and transmissibility == 1:
+        remaining_weeks = monitor.n_weeks - week
+        monitor.generate_weekly_transit('admissions', n_weeks=remaining_weeks)
+        monitor.generate_weekly_transit('discharges', n_weeks=remaining_weeks)
+
+    
+    return transmissibility
+
+
+def run_icu_bed_monitor(env, monitor, lockdown_interval: List[int]):
     """ Orquestra a simulação, semana a semana atualizando o
-        monitor de leitos com as movimentações semanais """
+        monitor de leitos com as movimentações semanais.
 
-    for _ in range(n_weeks):
-        admissions = monitor.weekly_transit(kind='admissions')
-        # solução temporária até gerar um número coerente de liberações
+        Argumentos:
+        lockdown_interval: lista de inteiro com as semanas onde há lockdown
+    """
+    transmissibility = 1
+
+    for week in range(1, monitor.n_weeks):
+
+        transmissibility = manage_lockdown(monitor, week, lockdown_interval, transmissibility)
+
+        admissions = int( monitor.admissions[week] * transmissibility )
+        
         past_held_beds = monitor.total_beds - monitor.beds.level
-        real_discharges = monitor.weekly_transit(kind='discharges')
+        real_discharges = monitor.discharges[week]
+        # Para garantir que não vamos liberar mais leitos do que os que estão ocupados
         discharges = real_discharges if real_discharges <= past_held_beds else past_held_beds
-
-        #TODO: aloca mais ou libera leitos se a demanda pedir isso
+        print(f'\nSemana {env.now}: Liberou {discharges} e admitiu {admissions} pacientes')
 
         if discharges > 0:
             monitor.beds.put(discharges)
         if admissions > 0:
             monitor.beds.get(admissions)
 
-        print(f'\nSemana {env.now}: Liberou {discharges} e admitiu {admissions} pacientes')
-
-        curent_held_beds = monitor.total_beds - monitor.beds.level
-        ocupation_percentage = curent_held_beds/monitor.total_beds * 100
-        ocupation_percentage_history.append(ocupation_percentage)
-        #waiting_for_bed_history.append()
-
-        # Apresenta na linha de comando um resumo da semana
-        print(f"Semana {env.now}: {monitor.total_beds} leitos ({curent_held_beds} ocupados e {monitor.beds.level} livres). Ocupação de {int(ocupation_percentage)}%")
+        monitor.record_ocupation_percentage(env.now)
 
         yield env.timeout(1)
 
@@ -141,21 +209,21 @@ parser.add_argument('-p',
                     type=int,
                     default=NUMBER_OF_INITIAL_PATIENTS,
                     dest="n_init_patients",
-                    help=f'(Opcional) Número de pacientes iniciais, padrão é {NUMBER_OF_INITIAL_PATIENTS}')                
+                    help=f'(Opcional) Número de pacientes iniciais, padrão é {NUMBER_OF_INITIAL_PATIENTS}')
+
+parser.add_argument('-1',
+                    '--cenario-1',
+                    action='store_true',                    
+                    default=False,
+                    dest="scenario_1",
+                    help='(Opcional) Define que o cenário de simulação 1 será executado.')
 
 parser.add_argument('-s',
                     '--semente',
                     type=int,
-                    default=SEED,
+                    default=numpy.random.randint(1000),
                     dest="seed",
                     help='(Opcional) Semente de aleatoriedade para obtenção de resultados reproduzíveis.')
-
-parser.add_argument('-a',
-                    '--usar-sementes-aleatorias',
-                    action='store_true',                    
-                    default=False,
-                    dest="use_random_seed",
-                    help='(Opcional) Faz os experimentos sempre rodarem com sementes aleatórias.')
 
 
 def plot_results():
@@ -164,45 +232,67 @@ def plot_results():
     # obtem as dimensões atuais do terminal
     term_height, term_width = os.popen('stty size', 'r').read().split()
 
-    fig = tpl.figure()
+    fig1 = tpl.figure()
+    fig2 = tpl.figure()
     x = range(len(ocupation_percentage_history))
     
-    print("\nOcupação média dos leitos ao longo das semanas:")
-    fig.plot(
+    print("\nOcupação percentual dos leitos ao longo das semanas:")
+    fig1.plot(
         x=x,
         y=ocupation_percentage_history,
         width=int(term_width),
         height=int(term_height)//2
     )
 
-    fig.show()
+    fig1.show()
+
+    print("\nN° de leitos ocupados:")
+    fig2.plot(
+        x=x,
+        y=absolute_ocupation_history,
+        width=int(term_width),
+        height=int(term_height)//2
+    )
+
+    fig2.show()
 
 
 def simulate():
     """ Executa a simulação """
 
     args = parser.parse_args()
-    
-    if not args.use_random_seed:
-        random.seed(args.seed)
+
+    numpy.random.seed(args.seed)
+    # seed=918 dá bons resultados para o cenário geral
+    # seed=273 dá bons resultados para o cenário 1
 
     # Executa a simulação
     env = simpy.Environment()
     monitor = ICUMonitor(
-        env, 
+        env,
+        n_weeks=SCENARIO_1_N_WEEKS if args.scenario_1 else args.n_weeks,
         n_beds=args.n_beds, 
-        n_init_patients=args.n_init_patients,
-        admissions_pdf='exponential',
-        discharges_pdf='exponential'    
+        n_patients=SCENARIO_1_PACIENTS if args.scenario_1 else args.n_init_patients,
+        adm_pdf='normal',
+        disc_pdf='normal'    
     )
-    env.process(run_icu_bed_monitor(env, monitor, args.n_weeks))
+
+    env.process(run_icu_bed_monitor(
+        env=env, 
+        monitor=monitor,
+        lockdown_interval=SCENARIO_1_LOCKDOWN if args.scenario_1 else []
+        ))
+    
+    print("Simulação iniciada. os parametros são\n:", args)
     env.run()
     print("\nSimulação finalizada.")
 
     # Apresenta gráficos sobre a ocupação média (se o cliente tiver gnuplot instalado)
     if which('gnuplot') is not None:
         plot_results()
-    
+
+    # salva os resultados em um .csv
+    numpy.savetxt("scenario_1_results.csv", numpy.round(ocupation_percentage_history), delimiter =",", fmt='%1.1f')
 
 
 if __name__ == "__main__":
