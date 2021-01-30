@@ -38,18 +38,16 @@ import simpy
 # Argumentos padrões da simulação
 DEFAULT_N_WEEKS = 52 # simula por um ano
 NUMBER_OF_ICU_BEDS = 9860 # Número de leitos na França
-NUMBER_OF_INITIAL_PATIENTS = 100 # Pacientes iniciais
+NUMBER_OF_INITIAL_PATIENTS = 0 # Pacientes iniciais
 
 # arguementos relacionados ao cenário de simulação 1: lockdown de dezembro extendido
 SCENARIO_1_N_WEEKS = 10
 SCENARIO_1_LOCKDOWN = list(range(5)) # lockdown vai da 1° a 4° semana de simulação
 SCENARIO_1_PACIENTS = 2896 # Número de leitos ocupados em 14 de dezembro de 2020
 
-# sem uso por enquanto
-TIME_TO_CLOSE_BED = 3 # semanas para desativar leitos vazios
-MAX_OCUPATION_TO_NEW_BEDS = 0.70 # limite de ocupação para a criação de novos leitos
-LOCKDOWN_ON_PERCENTAGE = 0.30 # pocentagem de ocupação limite (passou disso é lockdown)
-LOCDOWN_OFF_PERCENTAGE = 0.10 # porcentagem de ocupação limite para remoção do lock down
+# Arguemntos relacionados ao 2° cenário de simulação
+SCENARIO_2_N_BEDS = 5054
+SCENARIO_2_OCUPATION_TO_LOCKDOWN = 70.0 # pocentagem de ocupação limite (passou disso é lockdown)
 
 # armazena algumas métricas importantes da simulação
 ocupation_percentage_history = []
@@ -68,7 +66,7 @@ EVENTS_STATISTICS = {
 class ICUMonitor():
     """ Contém a lógica de controle do monitor de leitos que será simulado """
 
-    def __init__(self, env, n_weeks, n_beds, n_patients, adm_pdf, disc_pdf):
+    def __init__(self, env, n_weeks: int, n_beds: int, n_patients: int, ocupation_to_lockdown: float, adm_pdf: str, disc_pdf: str):
         """ Ao instanciar o monitor de leitos, considerar estes atributos inciais """
 
         self.env = env
@@ -76,12 +74,14 @@ class ICUMonitor():
         self.beds = simpy.Container(env, n_beds, init=n_beds-n_patients)
         self.total_beds = n_beds
 
+        self.ocupation_to_lockdown = ocupation_to_lockdown
+        self.n_weeks = n_weeks
+    
         # define qual função densidade de probabilidade é usada para gerar os
         # números de admissões e liberações semanais dosleitos
         self.admissions_pdf = adm_pdf
         self.discharges_pdf = disc_pdf
-        # amostra valores para as admissões e liberações de leitos
-        self.n_weeks = n_weeks
+    
         # amostra os valores antes de iniciar a simulação
         self.admissions = self.generate_weekly_transit(kind="admissions")
         self.discharges = self.generate_weekly_transit(kind="discharges")
@@ -118,42 +118,67 @@ class ICUMonitor():
     def record_ocupation_percentage(self, week):
         """ Calcula e armazena estatísticas sobre a ocupação de leitos da semana """
 
-        curent_held_beds = self.total_beds - self.beds.level
-        ocupation_percentage = curent_held_beds / self.total_beds * 100
+        current_held_beds = self.total_beds - self.beds.level
+        ocupation_percentage = current_held_beds / self.total_beds * 100
         
-        absolute_ocupation_history.append(curent_held_beds)
+        absolute_ocupation_history.append(current_held_beds)
         ocupation_percentage_history.append(ocupation_percentage)
-        print(f"Semana {week}: {self.total_beds} leitos ({curent_held_beds} ocupados e {self.beds.level} livres). Ocupação de {int(ocupation_percentage)}%")
+        print(f"Semana {week}: {self.total_beds} leitos: {current_held_beds}/{self.beds.level} (ocupados/livres). {round(ocupation_percentage)}% ocupado")
 
-    def cenario_1(self, env):
-        """ Cenário onde o lockdown foi decretado tardiamente, como no Reino Unido """
-        pass
+        return ocupation_percentage
+
+
+def set_lockdown(curr_week: int, n_weeks: int):
+    """ Configura o cenário de lockdown por 4 semanas """
+
+    lockdown_interval = list(range(
+        curr_week+1, # começa o lockdown na semana seguinte
+        curr_week+5 # faz ele durar 4 semanas
+        ))
+
+    return lockdown_interval
 
 
 def manage_lockdown(monitor, week: int, lockdown_interval: List, last_transmissibility: float):
-    """ Altera os parametros da simulação como ocorreria em caso de lockdown """
+    """ Altera os parametros da simulação simulando as alterações que ocorreriam
+    na pandemia em caso de lockdown """
 
-    # de fato só precisa gerenciar um lockdown o usuário definir um
-    if lockdown_interval == []: return last_transmissibility
-    
+    if lockdown_interval == []:
+        return last_transmissibility, lockdown_interval
+
     in_lockdown = week in lockdown_interval
-    # verifica se está no estado recém saído do lockdown
+    lockdown_start_week = lockdown_interval[0]
     lockdown_end_week = lockdown_interval[-1]
-    recent_lockdown_end = lockdown_end_week <= week <= lockdown_end_week + 2
-    mild_spread = in_lockdown or recent_lockdown_end
     
-    # retorna o fator de contágio adequado ao momento
-    transmissibility = 0.25 if mild_spread else 1
-    transmissibility += 0.25 if recent_lockdown_end else 0
+    # determina se precisa limpar os dados do último lockdown
+    ended = False 
+    if week > lockdown_end_week + 2:
+        lockdown_interval = []
+        ended = True
+
+    recent_start = lockdown_start_week <= week <= lockdown_start_week +2
+    recent_end = lockdown_end_week <= week <= lockdown_end_week + 2
+    print('recent start', recent_start,'recent end', recent_end)
+    
+    if recent_start:
+        transmissibility = 0.75
+    elif in_lockdown:
+        # O período de duas semanas após o ínicio do lockdown ainda não apresenta diminuição drástica no número de casos
+        transmissibility = 0.25
+    elif recent_end:
+        # o período de duas semanas após o término do lockdown é marcado por um contágio brando
+        transmissibility = 0.50
+    elif ended:
+        transmissibility = 1.00
     
     # determina se acabou o cooldown do lockdown por completo para reamostrar os dados
-    if last_transmissibility < 1 and transmissibility == 1:
+    if ended:
+        print("Reamostrando!")
         remaining_weeks = monitor.n_weeks - week
         monitor.generate_weekly_transit('admissions', n_weeks=remaining_weeks)
         monitor.generate_weekly_transit('discharges', n_weeks=remaining_weeks)
 
-    
-    return transmissibility
+    return transmissibility, lockdown_interval
 
 
 def run_icu_bed_monitor(env, monitor, lockdown_interval: List[int]):
@@ -163,26 +188,32 @@ def run_icu_bed_monitor(env, monitor, lockdown_interval: List[int]):
         Argumentos:
         lockdown_interval: lista de inteiro com as semanas onde há lockdown
     """
-    transmissibility = 1
+    transmissibility = 1.0
 
-    for week in range(1, monitor.n_weeks):
+    for week in range(1, monitor.n_weeks+1):
 
-        transmissibility = manage_lockdown(monitor, week, lockdown_interval, transmissibility)
+        transmissibility, lockdown_interval = manage_lockdown(monitor, week, lockdown_interval, transmissibility)
 
-        admissions = int( monitor.admissions[week] * transmissibility )
+        admissions = int( monitor.admissions[week-1] * transmissibility )
         
         past_held_beds = monitor.total_beds - monitor.beds.level
-        real_discharges = monitor.discharges[week]
+        real_discharges = monitor.discharges[week-1]
         # Para garantir que não vamos liberar mais leitos do que os que estão ocupados
         discharges = real_discharges if real_discharges <= past_held_beds else past_held_beds
         print(f'\nSemana {env.now}: Liberou {discharges} e admitiu {admissions} pacientes')
+        print(f'Em lockdown: {lockdown_interval != []}. Taxa de transmissão: {transmissibility*100}%')
+        print(f'lockdown_interval: {lockdown_interval}')
 
         if discharges > 0:
             monitor.beds.put(discharges)
         if admissions > 0:
             monitor.beds.get(admissions)
 
-        monitor.record_ocupation_percentage(env.now)
+        # calcual a ocupação percentual, se estiver acima do limite, decreta um lockdown (se não já estivermos em um)
+        curr_ocupation = monitor.record_ocupation_percentage(env.now)
+        if curr_ocupation > monitor.ocupation_to_lockdown and lockdown_interval == []:
+            print('Ocupação suiperior ao limite: Decretando lockdown nacional!')
+            lockdown_interval = set_lockdown(env.now, monitor.n_weeks)
 
         yield env.timeout(1)
 
@@ -217,6 +248,13 @@ parser.add_argument('-1',
                     default=False,
                     dest="scenario_1",
                     help='(Opcional) Define que o cenário de simulação 1 será executado.')
+
+parser.add_argument('-2',
+                    '--cenario-2',
+                    action='store_true',                    
+                    default=False,
+                    dest="scenario_2",
+                    help='(Opcional) Define que o cenário de simulação 2 será executado.')
 
 parser.add_argument('-s',
                     '--semente',
@@ -265,16 +303,18 @@ def simulate():
     numpy.random.seed(args.seed)
     # seed=918 dá bons resultados para o cenário geral
     # seed=273 dá bons resultados para o cenário 1
+    # seed=226 dá bons resultados para o cenário 2
 
     # Executa a simulação
     env = simpy.Environment()
     monitor = ICUMonitor(
         env,
         n_weeks=SCENARIO_1_N_WEEKS if args.scenario_1 else args.n_weeks,
-        n_beds=args.n_beds, 
         n_patients=SCENARIO_1_PACIENTS if args.scenario_1 else args.n_init_patients,
+        n_beds=SCENARIO_2_N_BEDS if args.scenario_2 else args.n_beds,
+        ocupation_to_lockdown=SCENARIO_2_OCUPATION_TO_LOCKDOWN if args.scenario_2 else float('inf'),
         adm_pdf='normal',
-        disc_pdf='normal'    
+        disc_pdf='normal' 
     )
 
     env.process(run_icu_bed_monitor(
@@ -292,7 +332,7 @@ def simulate():
         plot_results()
 
     # salva os resultados em um .csv
-    numpy.savetxt("scenario_1_results.csv", numpy.round(ocupation_percentage_history), delimiter =",", fmt='%1.1f')
+    numpy.savetxt("results.csv", numpy.round(ocupation_percentage_history), delimiter =",", fmt='%1.1f')
 
 
 if __name__ == "__main__":
