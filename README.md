@@ -7,7 +7,7 @@ Tarefa final da disciplina de simulação discreta.
   # obter pacotes requeridos
   pip3 install -r numpy simpy termplotlib
   
-  # opcional: ober gnuplot
+  # opcional: obter gnuplot
   sudo apt-get update -y
   sudo apt-get install -y gnuplot
   
