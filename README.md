@@ -14,9 +14,9 @@ Tarefa final da disciplina de simulação discreta.
   # Caso de simulação base:
   python3 icu_bed_monitor.py 
   
-  # Caso de simulação base:
+  # Cenário 1: lockdowns rigorosos
   python3 icu_bed_monitor.py --scenario-1
   
-  # Caso de simulação base:
+  # Cenário 2: extensão do lockdown de final de ano
   python3 icu_bed_monitor.py --scenario-2
 ```
