@@ -12,11 +12,11 @@ Tarefa final da disciplina de simulação discreta.
   sudo apt-get install -y gnuplot
   
   # Caso de simulação base:
-  python3 icu_bed_monitor.py 
+  python3 monitor_de_leitos.py 
   
   # Cenário 1: lockdowns rigorosos
-  python3 icu_bed_monitor.py --scenario-1
+  python3 monitor_de_leitos.py --cenario-1
   
   # Cenário 2: extensão do lockdown de final de ano
-  python3 icu_bed_monitor.py --scenario-2
+  python3 monitor_de_leitos.py --cenario-2
 ```

@@ -6,15 +6,12 @@
         João Marcelo Almeida
         Isabela Maués
     
-    Dados relevantes sobre a pandemia na França:
+    Dados sobre a pandemia na França:
     - data de início do primeiro lockdown nacional na França: 17 de março, semana 12, ocupação era de 14%, 1700 novas admissões
     - primeiro pico de admissões em UTIs: semana 14, duas semanas após o ínicio do lockdown
 
     - segundo lockdown na França: 28 de outubro a 14 de dezembro, semana 44, ocupação era de 30%, 2571 novas admissões
     - segundo pico de admissões em UTIS: semana 45, uma semana após o ínicio do lockdown
-
-    (essa datas de pico de admissões fazem bastante sentido considerando o tempo médio de incubação do vírus
-    e o tempo médio de ínicio da fase mais violenta da doença nos acometidos por ela)
 """
 
 import argparse
@@ -195,7 +192,7 @@ def run_icu_bed_monitor(env, monitor, lockdown_interval: List[int]):
     """Orquestra a simulação, semana a semana atualizando o
     monitor de leitos com as movimentações semanais.
 
-    Argumentos:
+    Argu    mentos:
     lockdown_interval: lista de inteiro com as semanas onde há lockdown
     """
     transmissibility = 1.0
@@ -214,18 +211,18 @@ def run_icu_bed_monitor(env, monitor, lockdown_interval: List[int]):
         discharges = (
             real_discharges if real_discharges <= past_held_beds else past_held_beds
         )
+
         print(f"\nSemana {week}: Liberou {discharges} e admitiu {admissions} pacientes")
-        print(
-            f"Em lockdown: {week in lockdown_interval}. Taxa de transmissão: {transmissibility*100}%"
-        )
-        print(f"lockdown_interval: {lockdown_interval}")
+        lockdown_text = "Em lockdown! " if week in lockdown_interval else ""
+        print(f"{lockdown_text}Taxa de transmissão: {transmissibility*100}%")
+        #print(f"lockdown_interval: {lockdown_interval}")
 
         if discharges > 0:
             monitor.beds.put(discharges)
         if admissions > 0:
             monitor.beds.get(admissions)
 
-        # calcual a ocupação percentual, se estiver acima do limite, decreta um lockdown (se não já estivermos em um)
+        # calcula a ocupação percentual, se estiver acima do limite, decreta um lockdown (se não já estivermos em um)
         curr_ocupation = monitor.record_ocupation_percentage(env.now)
         if curr_ocupation > monitor.ocupation_to_lockdown and lockdown_interval == []:
             print("Ocupação suiperior ao limite: Decretando lockdown nacional!")
@@ -313,16 +310,6 @@ def plot_results():
     )
 
     fig1.show()
-
-    print("\nN° de leitos ocupados:")
-    fig2.plot(
-        x=x,
-        y=absolute_ocupation_history,
-        width=int(term_width),
-        height=int(term_height) // 2,
-    )
-
-    fig2.show()
 
 
 def simulate():
