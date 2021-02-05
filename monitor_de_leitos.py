@@ -61,7 +61,7 @@ class ICUMonitor:
 
     def __init__(
         self,
-        env,
+        env: simpy.Environment,
         n_weeks: int,
         n_beds: int,
         n_patients: int,
@@ -88,6 +88,7 @@ class ICUMonitor:
         self.admissions = self.generate_weekly_transit(kind="admissions")
         self.discharges = self.generate_weekly_transit(kind="discharges")
 
+
     def generate_weekly_transit(self, kind: str, n_weeks=None):
         """Amostra o número de novas admissões semanais a partir de uma distribuição normal
         kind: pode ser 'admissions' ou 'discharges'"""
@@ -112,11 +113,13 @@ class ICUMonitor:
                     size=n_weeks,
                 )
 
+            # Garante que somente valores positivos foram amostrados
             transit.sort()
             if transit[0] >= 0:
                 break
 
         return sorted([int(i) for i in transit])
+
 
     def record_ocupation_percentage(self, week):
         """ Calcula e armazena estatísticas sobre a ocupação de leitos da semana """
@@ -147,7 +150,7 @@ def set_lockdown(curr_week: int, n_weeks: int):
 
 
 def manage_lockdown(
-    monitor, week: int, lockdown_interval: List, transmissibility: float
+    monitor: ICUMonitor, week: int, lockdown_interval: List, transmissibility: float
 ):
     """Altera os parametros da simulação simulando as alterações que ocorreriam
     na pandemia em caso de lockdown"""
@@ -188,7 +191,7 @@ def manage_lockdown(
     return transmissibility, lockdown_interval
 
 
-def run_icu_bed_monitor(env, monitor, lockdown_interval: List[int]):
+def run_icu_bed_monitor(env: simpy.Environment, monitor: ICUMonitor, lockdown_interval: List[int]):
     """Orquestra a simulação, semana a semana atualizando o
     monitor de leitos com as movimentações semanais.
 
